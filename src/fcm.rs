@@ -70,7 +70,7 @@ impl FirebaseCloudMessaging {
 
     /// Reference: https://firebase.google.com/docs/cloud-messaging/send-message#send-messages-to-multiple-devices
     pub async fn send_to_devices(
-        &mut self,
+        &self,
         registration_tokens: impl IntoIterator<Item = impl Into<String>>,
         message: Message,
     ) -> crate::Result<Vec<Result<SendMessageSuccessResponse, SendMessageErrorResponse>>> {
@@ -265,7 +265,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_send_to_devices() {
-        let mut fcm = FirebaseCloudMessaging::from_credential_path("./firebase.credential.json");
+        let fcm = FirebaseCloudMessaging::from_credential_path("./firebase.credential.json");
 
         let registration_token = "";
         let message = Message::new("title", "body");

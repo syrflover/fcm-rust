@@ -10,6 +10,7 @@ use std::{
 };
 
 use jsonwebtoken::{Algorithm, EncodingKey};
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize)]
@@ -109,7 +110,7 @@ pub struct GoogleOAuth2 {
     /// e.g. `https://fcm.googleapis.com/`
     service_endpoint: String,
 
-    oauth2_token: Option<String>,
+    oauth2_token: RwLock<Option<String>>,
 }
 
 impl GoogleOAuth2 {
@@ -121,12 +122,12 @@ impl GoogleOAuth2 {
     }
 
     pub fn from_credential(cred: Credential, service_endpoint: impl Into<String>) -> Self {
-        let mut this = Self {
+        let this = Self {
             client_email: cred.client_email,
             private_key_id: cred.private_key_id,
             private_key: cred.private_key,
             service_endpoint: service_endpoint.into(),
-            oauth2_token: None,
+            oauth2_token: Default::default(),
         };
 
         this.update_token();
@@ -135,24 +136,27 @@ impl GoogleOAuth2 {
     }
 
     pub fn get_token(&self) -> Option<String> {
-        match self.oauth2_token.clone() {
+        let oauth2_token = self.oauth2_token.read();
+
+        match oauth2_token.clone() {
             Some(oauth2_token) if Self::check(&oauth2_token) => Some(oauth2_token),
             _ => None,
         }
     }
 
-    pub fn update_token(&mut self) -> String {
+    pub fn update_token(&self) -> String {
         let header = Header::new(self.private_key_id.clone());
         let payload = Payload::new(self.client_email.clone(), self.service_endpoint.clone());
 
         let oauth2_token = Self::encode(header, payload, self.private_key.as_bytes());
 
-        self.oauth2_token.replace(oauth2_token.clone());
+        let mut oauth2_token_holder = self.oauth2_token.write();
+        oauth2_token_holder.replace(oauth2_token.clone());
 
         oauth2_token
     }
 
-    pub fn get_or_update_token(&mut self) -> String {
+    pub fn get_or_update_token(&self) -> String {
         match self.get_token() {
             Some(oauth2_token) => oauth2_token,
             None => self.update_token(),
@@ -189,7 +193,7 @@ mod tests {
 
     #[tokio::test]
     async fn test() {
-        let mut oauth2 = GoogleOAuth2::from_credential_path(
+        let oauth2 = GoogleOAuth2::from_credential_path(
             "./firebase.credential.json",
             "https://fcm.googleapis.com/",
         );
