@@ -5,7 +5,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    auth::{Credential, GoogleOAuth2},
+    oauth::{Credential, GoogleOAuth2},
     Error,
 };
 
