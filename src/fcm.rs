@@ -23,6 +23,10 @@ impl FirebaseCloudMessaging {
         Self::from_credential(Credential::from_path(p))
     }
 
+    pub fn from_env() -> Self {
+        Self::from_credential(Credential::from_env())
+    }
+
     pub fn from_credential(cred: Credential) -> Self {
         Self {
             project_id: cred.project_id.clone(),

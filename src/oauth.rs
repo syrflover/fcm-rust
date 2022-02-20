@@ -3,6 +3,7 @@
 //! Reference: https://developers.google.com/identity/protocols/oauth2/service-account#jwt-auth
 
 use std::{
+    env,
     fs::File,
     io::BufReader,
     path::Path,
@@ -38,6 +39,23 @@ impl Credential {
             serde_json::from_reader(buf_reader).expect("failed deserialize from credential file");
 
         cred
+    }
+
+    pub fn from_env() -> Self {
+        let project_id = env::var("FIREBASE_PROJECT_ID").expect("please set FIREBASE_PROJECT_ID");
+        let private_key_id =
+            env::var("FIREBASE_PRIVATE_KEY_ID").expect("please set FIREBASE_PRIVATE_KEY_ID");
+        let private_key =
+            env::var("FIREBASE_PRIVATE_KEY").expect("please set FIREBASE_PRIVATE_KEY");
+        let client_email =
+            env::var("FIREBASE_CLIENT_EMAIL").expect("please set FIREBASE_CLIENT_EMAIL");
+
+        Self {
+            project_id,
+            private_key_id,
+            private_key,
+            client_email,
+        }
     }
 }
 
@@ -119,6 +137,10 @@ impl GoogleOAuth2 {
         P: AsRef<Path>,
     {
         Self::from_credential(Credential::from_path(p), service_endpoint)
+    }
+
+    pub fn from_env(service_endpoint: impl Into<String>) -> Self {
+        Self::from_credential(Credential::from_env(), service_endpoint)
     }
 
     pub fn from_credential(cred: Credential, service_endpoint: impl Into<String>) -> Self {
