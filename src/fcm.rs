@@ -190,19 +190,19 @@ impl FirebaseCloudMessaging {
     }
 }
 
-#[cfg_attr(test, derive(PartialEq))]
+#[cfg_attr(test, derive(Eq, PartialEq))]
 #[derive(Debug, Deserialize)]
 pub struct SendMessageSuccessResponse {
     pub name: String,
 }
 
-#[cfg_attr(test, derive(PartialEq))]
+#[cfg_attr(test, derive(Eq, PartialEq))]
 #[derive(Debug, Deserialize)]
 pub struct SendMessageErrorResponse {
     pub error: SendMessageError,
 }
 
-#[cfg_attr(test, derive(PartialEq))]
+#[cfg_attr(test, derive(Eq, PartialEq))]
 #[derive(Debug, Deserialize)]
 pub struct SendMessageError {
     pub code: u16,
@@ -332,7 +332,7 @@ Vary: Referer
 
 --{boundary}--"#
         )
-        .replace("\n", "\r\n");
+        .replace('\n', "\r\n");
 
         let actual = FirebaseCloudMessaging::parse_batch_response(&responses, boundary, 3).unwrap();
 
@@ -372,7 +372,7 @@ Vary: Referer
 {
     "name": "projects/35006771263/messages/0:1570471792141696%43c11b7043c11b70"
 }"#
-        .replace("\n", "\r\n");
+        .replace('\n', "\r\n");
 
         let actual = FirebaseCloudMessaging::parse_response(&success)
             .unwrap()
@@ -401,7 +401,7 @@ Vary: Referer
         "status": "INVALID_ARGUMENT"
     }
 }"#
-        .replace("\n", "\r\n");
+        .replace('\n', "\r\n");
 
         let actual = FirebaseCloudMessaging::parse_response(&error)
             .unwrap()

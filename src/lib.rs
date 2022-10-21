@@ -7,6 +7,6 @@ pub use fcm::{
     FirebaseCloudMessaging, Message, SendMessageError, SendMessageErrorResponse,
     SendMessageSuccessResponse,
 };
-pub use oauth::GoogleOAuth2;
+pub use oauth::{Credential, GoogleOAuth2};
 
 pub type Result<T> = std::result::Result<T, Error>;
