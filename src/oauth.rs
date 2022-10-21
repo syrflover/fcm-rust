@@ -4,6 +4,7 @@
 
 use std::{
     env,
+    fmt::Debug,
     fs::File,
     io::BufReader,
     path::Path,
@@ -14,7 +15,7 @@ use jsonwebtoken::{Algorithm, EncodingKey};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct Credential {
     // pub(crate) r#type: String,
     pub(crate) project_id: String,
@@ -56,6 +57,12 @@ impl Credential {
             private_key,
             client_email,
         }
+    }
+}
+
+impl Debug for Credential {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("firebase credential")
     }
 }
 
