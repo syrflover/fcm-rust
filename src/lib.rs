@@ -4,7 +4,7 @@ mod oauth;
 
 pub use error::Error;
 pub use fcm::{
-    FirebaseCloudMessaging, Message, SendMessageError, SendMessageErrorResponse,
+    FirebaseCloudMessaging, Message, Priority, SendMessageError, SendMessageErrorResponse,
     SendMessageSuccessResponse, SendOptions,
 };
 pub use oauth::{Credential, GoogleOAuth2};

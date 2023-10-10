@@ -91,7 +91,10 @@ impl FirebaseCloudMessaging {
             let content = Body {
                 token: registration_token.into(),
                 notification: Cow::Borrowed(&message),
-                options: Cow::Borrowed(&options),
+                // options: Cow::Borrowed(&options),
+                // FIXME: why unknown field
+                options: Default::default(),
+                apns: options.to_apns_payload().into(),
                 data: data.as_ref(),
             };
 
@@ -233,6 +236,20 @@ where
     message: Body<'a, D>,
 }
 
+#[derive(Debug, Serialize, Clone, Copy)]
+pub enum Priority {
+    #[serde(rename = "normal")]
+    Normal,
+    #[serde(rename = "high")]
+    High,
+}
+
+impl Default for Priority {
+    fn default() -> Self {
+        Self::Normal
+    }
+}
+
 #[derive(Debug, Serialize, Default, Clone)]
 pub struct SendOptions {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -242,7 +259,41 @@ pub struct SendOptions {
     pub mutable_content: Option<bool>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub priority: Option<bool>,
+    pub priority: Option<Priority>,
+}
+
+impl SendOptions {
+    fn to_apns_payload(&self) -> WrappedApnsPayload {
+        let mutable_content = self.mutable_content.unwrap_or(false);
+        let content_available = self.content_available.unwrap_or(false);
+
+        WrappedApnsPayload {
+            payload: Aps {
+                aps: ApnsPayload {
+                    mutable_content: if mutable_content { 1 } else { 0 }.into(),
+                    content_available: if content_available { 1 } else { 0 }.into(),
+                },
+            },
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct ApnsPayload {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mutable_content: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    content_available: Option<u8>,
+}
+
+#[derive(Debug, Serialize)]
+struct Aps {
+    aps: ApnsPayload,
+}
+
+#[derive(Debug, Serialize)]
+struct WrappedApnsPayload {
+    payload: Aps,
 }
 
 #[derive(Debug, Serialize)]
@@ -252,6 +303,8 @@ where
 {
     token: String,
     notification: Cow<'a, Message>,
+
+    apns: Option<WrappedApnsPayload>,
 
     #[serde(flatten)]
     options: Cow<'a, SendOptions>,
@@ -268,6 +321,7 @@ where
         Self {
             token: "".to_string(),
             notification: Default::default(),
+            apns: None,
             options: Default::default(),
             data: None,
         }
@@ -291,8 +345,10 @@ impl Message {
 
 #[cfg(test)]
 mod tests {
+    use crate::SendOptions;
+
     use super::{
-        FirebaseCloudMessaging, Message, SendMessageError, SendMessageErrorResponse,
+        FirebaseCloudMessaging, Message, Priority, SendMessageError, SendMessageErrorResponse,
         SendMessageSuccessResponse,
     };
 
@@ -301,15 +357,27 @@ mod tests {
     async fn test_send_to_devices() {
         let fcm = FirebaseCloudMessaging::from_credential_path("./firebase.credential.json");
 
-        let registration_token = "";
+        let registration_token = "d46RIm3EiE94gTWXMz9tQS:APA91bGjhcwaqScz9CcKnQtyK6KjXUWPpVWjhDHthaqckIKr2uYeBbcwjwWq6bYeSfRucHBT7DCrFs0348ECnRUwZA01iI3vuvKfGdLPvKEqMkv8iCNkFN4xJ8HI7VUhVMi9TKGbo66a";
         let message = Message::new("title", "body");
+
+        #[derive(Debug, serde::Serialize)]
+        struct Data {
+            thumbnail: &'static str,
+        }
 
         let a = fcm
             .send_to_devices(
                 [registration_token],
                 message,
-                Default::default(),
-                None::<()>,
+                SendOptions {
+                    mutable_content: true.into(),
+                    content_available: true.into(),
+                    priority: Priority::High.into(),
+                },
+                Data {
+                    thumbnail: "https://file.madome.app/image/library/2699651/thumbnail",
+                }
+                .into(),
             )
             .await;
 
