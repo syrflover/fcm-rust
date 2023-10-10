@@ -1,4 +1,4 @@
-use std::{fmt::Display, path::Path};
+use std::{borrow::Cow, fmt::Display, path::Path};
 
 use http::{header, Method, StatusCode};
 use reqwest::Client;
@@ -47,21 +47,18 @@ impl FirebaseCloudMessaging {
 
     const BOUNDARY: &'static str = "fcm_rust_sdk";
 
-    fn add_part(
-        project_id: impl AsRef<str>,
-        oauth2_token: impl AsRef<str>,
-        xs: &mut Vec<String>,
-        content: Content,
-    ) {
+    fn add_part<D>(project_id: &str, oauth2_token: &str, xs: &mut Vec<String>, content: Body<'_, D>)
+    where
+        D: Serialize,
+    {
+        let content = WrappedBody { message: content };
+
         xs.push(format!("--{}", Self::BOUNDARY));
         xs.push("Content-Type: application/http".to_string());
         xs.push("Content-Transfer-Encoding: binary".to_string());
-        xs.push(format!("Authorization: Bearer {}", oauth2_token.as_ref()));
+        xs.push(format!("Authorization: Bearer {}", oauth2_token));
         xs.push("".to_string());
-        xs.push(format!(
-            "POST /v1/projects/{}/messages:send",
-            project_id.as_ref()
-        ));
+        xs.push(format!("POST /v1/projects/{}/messages:send", project_id));
         xs.push("Content-Type: application/json".to_string());
         xs.push("accept: application/json".to_string());
         xs.push("".to_string());
@@ -73,20 +70,32 @@ impl FirebaseCloudMessaging {
     }
 
     /// Reference: https://firebase.google.com/docs/cloud-messaging/send-message#send-messages-to-multiple-devices
-    pub async fn send_to_devices(
+    pub async fn send_to_devices<D>(
         &self,
         registration_tokens: impl IntoIterator<Item = impl Into<String>>,
         message: Message,
-    ) -> crate::Result<Vec<Result<SendMessageSuccessResponse, SendMessageErrorResponse>>> {
+        options: SendOptions,
+        data: Option<D>,
+    ) -> crate::Result<Vec<Result<SendMessageSuccessResponse, SendMessageErrorResponse>>>
+    where
+        D: Serialize,
+    {
         let mut xs = Vec::new();
         let mut batch_len = 0;
 
+        let oauth2_token = self.oauth2.get_or_update_token();
+
         for registration_token in registration_tokens {
             batch_len += 1;
-            let content = Content::new(registration_token.into(), message.clone());
 
-            let oauth2_token = self.oauth2.get_or_update_token();
-            Self::add_part(&self.project_id, oauth2_token, &mut xs, content);
+            let content = Body {
+                token: registration_token.into(),
+                notification: Cow::Borrowed(&message),
+                options: Cow::Borrowed(&options),
+                data: data.as_ref(),
+            };
+
+            Self::add_part(&self.project_id, &oauth2_token, &mut xs, content);
         }
 
         Self::add_end_boundary(&mut xs);
@@ -217,34 +226,55 @@ impl Display for SendMessageErrorResponse {
 }
 
 #[derive(Debug, Serialize)]
-struct Content {
-    message: ContentInner,
+struct WrappedBody<'a, D>
+where
+    D: Serialize,
+{
+    message: Body<'a, D>,
 }
 
-impl Content {
-    pub fn new(registration_token: String, message: Message) -> Self {
-        let inner = ContentInner::new(registration_token, message);
+#[derive(Debug, Serialize, Default, Clone)]
+pub struct SendOptions {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_available: Option<bool>,
 
-        Self { message: inner }
-    }
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mutable_content: Option<bool>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub priority: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
-struct ContentInner {
+struct Body<'a, D>
+where
+    D: Serialize,
+{
     token: String,
-    notification: Message,
+    notification: Cow<'a, Message>,
+
+    #[serde(flatten)]
+    options: Cow<'a, SendOptions>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data: Option<&'a D>,
 }
 
-impl ContentInner {
-    pub fn new(registration_token: String, message: Message) -> Self {
+impl<'a, D> Default for Body<'a, D>
+where
+    D: Serialize,
+{
+    fn default() -> Self {
         Self {
-            token: registration_token,
-            notification: message,
+            token: "".to_string(),
+            notification: Default::default(),
+            options: Default::default(),
+            data: None,
         }
     }
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Clone, Default)]
 pub struct Message {
     pub title: String,
     pub body: String,
@@ -274,7 +304,14 @@ mod tests {
         let registration_token = "";
         let message = Message::new("title", "body");
 
-        let a = fcm.send_to_devices([registration_token], message).await;
+        let a = fcm
+            .send_to_devices(
+                [registration_token],
+                message,
+                Default::default(),
+                None::<()>,
+            )
+            .await;
 
         println!("{a:?}")
     }
