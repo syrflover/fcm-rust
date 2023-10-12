@@ -72,6 +72,8 @@ impl FirebaseCloudMessaging {
         xs.push(format!("--{}--\r\n", Self::BOUNDARY));
     }
 
+    /// if registration tokens is empty, returns empty vec and do nothing
+    ///
     /// Reference: https://firebase.google.com/docs/cloud-messaging/send-message#send-messages-to-multiple-devices
     pub async fn send_to_devices<D>(
         &self,
@@ -99,6 +101,10 @@ impl FirebaseCloudMessaging {
             };
 
             Self::add_part(&self.project_id, &oauth2_token, &mut xs, body);
+        }
+
+        if batch_len == 0 {
+            return Ok(Vec::new());
         }
 
         Self::add_end_boundary(&mut xs);
