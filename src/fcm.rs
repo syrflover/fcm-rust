@@ -135,7 +135,7 @@ impl FirebaseCloudMessaging {
             (StatusCode::OK, Some(res_boundary)) => {
                 let res = res.text().await?;
 
-                println!("{res}");
+                // println!("{res}");
 
                 let res = Self::parse_batch_response(res.trim(), &res_boundary, batch_len)?;
 
@@ -160,6 +160,7 @@ impl FirebaseCloudMessaging {
     ) -> crate::Result<Vec<Result<SendMessageSuccessResponse, SendMessageErrorResponse>>> {
         // println!("{x}");
         // println!("{batch_len}");
+        // println!("boundary = {boundary}");
 
         x.split(&format!("--{boundary}"))
             .map(|x| x.trim())
@@ -196,7 +197,7 @@ impl FirebaseCloudMessaging {
             .split(';')
             .map(|x| x.trim())
             .find(|x| x.starts_with("boundary="))?
-            .replacen("boundary=", "batch_", 1);
+            .replacen("boundary=", "", 1);
 
         Some(r)
     }
