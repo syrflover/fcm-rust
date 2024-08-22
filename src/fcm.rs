@@ -372,6 +372,7 @@ mod tests {
         #[derive(Debug, serde::Serialize)]
         struct Data {
             thumbnail: &'static str,
+            book_id: &'static str,
         }
 
         let a = fcm
@@ -385,6 +386,7 @@ mod tests {
                 },
                 Data {
                     thumbnail: "https://file.madome.app/image/library/2699651/thumbnail",
+                    book_id: "2699651",
                 }
                 .into(),
             )

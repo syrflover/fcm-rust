@@ -11,6 +11,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use jsonwebtoken::{Algorithm, EncodingKey};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
@@ -202,7 +203,7 @@ impl GoogleOAuth2 {
 
     fn decode_payload(oauth2_token: &str) -> Option<Payload> {
         let p = oauth2_token.split('.').nth(1)?;
-        let buf = base64::decode_config(p, base64::URL_SAFE_NO_PAD).ok()?;
+        let buf = URL_SAFE_NO_PAD.decode(p).ok()?;
         serde_json::from_slice(&buf).ok()
     }
 
