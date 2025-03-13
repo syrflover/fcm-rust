@@ -196,9 +196,10 @@ impl GoogleOAuth2 {
     fn encode(header: Header, payload: Payload, key: &[u8]) -> String {
         // let header = Header::new(self.private_key_id.clone()).into();
         // let payload = Payload::new(self.client_email.clone(), self.service_endpoint.clone());
-        let key = EncodingKey::from_rsa_pem(key).expect("not rsa pem");
+        let key =
+            EncodingKey::from_rsa_pem(key).expect("can't parse `EncodingKey` from private key");
 
-        jsonwebtoken::encode(&header.into(), &payload, &key).expect("msg")
+        jsonwebtoken::encode(&header.into(), &payload, &key).unwrap()
     }
 
     fn decode_payload(oauth2_token: &str) -> Option<Payload> {

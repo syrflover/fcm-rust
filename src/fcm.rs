@@ -1,13 +1,10 @@
-use std::{borrow::Cow, fmt::Display, path::Path};
+use std::{fmt::Display, path::Path};
 
 use http::{header, Method, StatusCode};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    oauth::{Credential, GoogleOAuth2},
-    Error,
-};
+use crate::oauth::{Credential, GoogleOAuth2};
 
 pub struct FirebaseCloudMessaging {
     project_id: String,
@@ -35,193 +32,62 @@ impl FirebaseCloudMessaging {
         }
     }
 
-    /* pub fn new(firebase_token: impl Into<String>, project_id: impl Into<String>) -> Self {
-        let client = Client::new();
-
-        Self {
-            firebase_token: firebase_token.into(),
-            project_id: project_id.into(),
-            client,
-        }
-    } */
-
-    const BOUNDARY: &'static str = "fcm_rust_sdk";
-
-    fn add_part<D>(project_id: &str, oauth2_token: &str, xs: &mut Vec<String>, body: Body<'_, D>)
-    where
-        D: Serialize,
-    {
-        let body = WrappedBody { message: body };
-        let serialized_body = serde_json::to_string_pretty(&body).expect("json serialize");
-
-        // println!("{}", serialized_body);
-
-        xs.push(format!("--{}", Self::BOUNDARY));
-        xs.push("Content-Type: application/http".to_string());
-        xs.push("Content-Transfer-Encoding: binary".to_string());
-        xs.push(format!("Authorization: Bearer {}", oauth2_token));
-        xs.push("".to_string());
-        xs.push(format!("POST /v1/projects/{}/messages:send", project_id));
-        xs.push("Content-Type: application/json".to_string());
-        xs.push("accept: application/json".to_string());
-        xs.push("".to_string());
-        xs.push(serialized_body);
-    }
-
-    fn add_end_boundary(xs: &mut Vec<String>) {
-        xs.push(format!("--{}--\r\n", Self::BOUNDARY));
-    }
-
-    /// if registration tokens is empty, returns empty vec and do nothing
-    ///
-    /// Reference: https://firebase.google.com/docs/cloud-messaging/send-message#send-messages-to-multiple-devices
-    pub async fn send_to_devices<D>(
+    pub async fn send<D>(
         &self,
-        registration_tokens: impl IntoIterator<Item = impl Into<String>>,
-        message: Message,
-        options: SendOptions,
-        data: Option<D>,
-    ) -> crate::Result<Vec<Result<SendMessageSuccessResponse, SendMessageErrorResponse>>>
+        registration_token: &str,
+        message: &Message,
+        data: Option<&D>,
+    ) -> crate::Result<SendMessageSuccessResponse>
     where
         D: Serialize,
     {
-        let mut xs = Vec::new();
-        let mut batch_len = 0;
+        let url = format!(
+            "https://fcm.googleapis.com/v1/projects/{}/messages:send",
+            self.project_id
+        );
+        let authorization = format!("Bearer {}", self.oauth2.get_or_update_token());
+        let body = Body {
+            message: InnerBody {
+                token: registration_token,
+                notification: message,
+                data,
+            },
+        };
 
-        let oauth2_token = self.oauth2.get_or_update_token();
-
-        for registration_token in registration_tokens {
-            batch_len += 1;
-
-            let body = Body {
-                token: registration_token.into(),
-                notification: Cow::Borrowed(&message),
-                apns: options.to_apns_payload().into(),
-                data: data.as_ref(),
-            };
-
-            Self::add_part(&self.project_id, &oauth2_token, &mut xs, body);
-        }
-
-        if batch_len == 0 {
-            return Ok(Vec::new());
-        }
-
-        Self::add_end_boundary(&mut xs);
-
-        let body = xs.join("\r\n");
-
-        // println!("{body}");
-
-        // curl --data-binary @batch_request.txt -H 'Content-Type: multipart/mixed; boundary="subrequest_boundary"' https://fcm.googleapis.com/batch
-        let req = self
+        let response = self
             .client
-            .request(Method::POST, "https://fcm.googleapis.com/batch")
-            .header(
-                header::CONTENT_TYPE,
-                format!("multipart/mixed; boundary={}", Self::BOUNDARY),
-            )
-            .body(body);
+            .request(Method::POST, &url)
+            .header(header::AUTHORIZATION, authorization)
+            .body(serde_json::to_vec(&body).unwrap())
+            .send()
+            .await?;
 
-        // println!("{req:#?}");
+        let status_code = response.status();
 
-        let res = req.send().await?;
+        if status_code != StatusCode::OK {
+            let err = serde_json::from_slice::<SendMessageErrorResponse>(&response.bytes().await?)
+                .map_err(crate::Error::ResponseDeserialize)?;
 
-        // println!("{res:#?}");
-
-        let res_content_type = res
-            .headers()
-            .get(header::CONTENT_TYPE)
-            .and_then(|x| x.to_str().ok())
-            .unwrap_or("");
-
-        let res_boundary = Self::parse_boundary(res_content_type);
-
-        match (res.status(), res_boundary) {
-            (StatusCode::OK, Some(res_boundary)) => {
-                let res = res.text().await?;
-
-                // println!("{res}");
-
-                let res = Self::parse_batch_response(res.trim(), &res_boundary, batch_len)?;
-
-                Ok(res)
-            }
-
-            _ => {
-                let res = res.text().await?;
-
-                let error: SendMessageErrorResponse =
-                    serde_json::from_str(&res).map_err(Error::ResponseDeserialize)?;
-
-                Err(Error::SendMessage(error))
-            }
+            return Err(crate::Error::SendMessage(err));
         }
-    }
 
-    fn parse_batch_response(
-        x: &str,
-        boundary: &str,
-        batch_len: usize,
-    ) -> crate::Result<Vec<Result<SendMessageSuccessResponse, SendMessageErrorResponse>>> {
-        // println!("{x}");
-        // println!("{batch_len}");
-        // println!("boundary = {boundary}");
+        let res = serde_json::from_slice(&response.bytes().await?)
+            .map_err(crate::Error::ResponseDeserialize)?;
 
-        x.split(&format!("--{boundary}"))
-            .map(|x| x.trim())
-            .filter(|x| !x.is_empty())
-            .take(batch_len)
-            .map(Self::parse_response)
-            .collect::<Result<Vec<_>, _>>()
-    }
-
-    fn parse_response(
-        x: &str,
-    ) -> crate::Result<Result<SendMessageSuccessResponse, SendMessageErrorResponse>> {
-        let x = x.split("\r\n\r\n").last().unwrap_or_default();
-        let xx = x.split("\r\n").next().unwrap_or_default();
-
-        // println!("x = {x:?}");
-        // println!("xx = {xx:?}");
-
-        match serde_json::from_str(xx) {
-            Ok(r) => Ok(Ok(r)),
-            Err(_) => {
-                if let Ok(r) = serde_json::from_str(x) {
-                    Ok(Ok(r))
-                } else {
-                    let r = serde_json::from_str(x).map_err(Error::ResponseDeserialize)?;
-                    Ok(Err(r))
-                }
-            }
-        }
-    }
-
-    fn parse_boundary(x: &str) -> Option<String> {
-        let r = x
-            .split(';')
-            .map(|x| x.trim())
-            .find(|x| x.starts_with("boundary="))?
-            .replacen("boundary=", "", 1);
-
-        Some(r)
+        Ok(res)
     }
 }
 
-#[cfg_attr(test, derive(Eq, PartialEq))]
 #[derive(Debug, Deserialize)]
 pub struct SendMessageSuccessResponse {
     pub name: String,
 }
 
-#[cfg_attr(test, derive(Eq, PartialEq))]
 #[derive(Debug, Deserialize)]
 pub struct SendMessageErrorResponse {
     pub error: SendMessageError,
 }
 
-#[cfg_attr(test, derive(Eq, PartialEq))]
 #[derive(Debug, Deserialize)]
 pub struct SendMessageError {
     pub code: u16,
@@ -236,105 +102,23 @@ impl Display for SendMessageErrorResponse {
 }
 
 #[derive(Debug, Serialize)]
-struct WrappedBody<'a, D>
-where
-    D: Serialize,
-{
-    message: Body<'a, D>,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum Priority {
-    Low,
-    Normal,
-    High,
-}
-
-impl Default for Priority {
-    fn default() -> Self {
-        Self::Normal
-    }
-}
-
-#[derive(Debug, Default, Clone)]
-pub struct SendOptions {
-    pub content_available: Option<bool>,
-
-    pub mutable_content: Option<bool>,
-
-    pub priority: Option<Priority>,
-}
-
-impl SendOptions {
-    fn to_apns_payload(&self) -> WrappedApnsPayload {
-        let mutable_content = self.mutable_content.unwrap_or(false);
-        let content_available = self.content_available.unwrap_or(false);
-        let priority = match self.priority.unwrap_or(Priority::High) {
-            Priority::Low => 1,
-            Priority::Normal => 5,
-            Priority::High => 10,
-        };
-
-        WrappedApnsPayload {
-            payload: Aps {
-                aps: ApnsPayload {
-                    mutable_content: if mutable_content { 1 } else { 0 }.into(),
-                    content_available: if content_available { 1 } else { 0 }.into(),
-                    priority: priority.into(),
-                },
-            },
-        }
-    }
-}
-
-#[derive(Debug, Serialize)]
-struct ApnsPayload {
-    #[serde(rename = "mutable-content", skip_serializing_if = "Option::is_none")]
-    mutable_content: Option<u8>,
-    #[serde(rename = "content-available", skip_serializing_if = "Option::is_none")]
-    content_available: Option<u8>,
-    #[serde(rename = "apns-priority", skip_serializing_if = "Option::is_none")]
-    priority: Option<u8>,
-}
-
-#[derive(Debug, Serialize)]
-struct Aps {
-    aps: ApnsPayload,
-}
-
-#[derive(Debug, Serialize)]
-struct WrappedApnsPayload {
-    payload: Aps,
-}
-
-#[derive(Debug, Serialize)]
 struct Body<'a, D>
 where
     D: Serialize,
 {
-    token: String,
-    notification: Cow<'a, Message>,
-
-    apns: Option<WrappedApnsPayload>,
-
-    // TODO:
-    // android:,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    data: Option<&'a D>,
+    message: InnerBody<'a, D>,
 }
 
-impl<'a, D> Default for Body<'a, D>
+#[derive(Debug, Serialize)]
+struct InnerBody<'a, D>
 where
     D: Serialize,
 {
-    fn default() -> Self {
-        Self {
-            token: "".to_string(),
-            notification: Default::default(),
-            apns: None,
-            data: None,
-        }
-    }
+    token: &'a str,
+    notification: &'a Message,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data: Option<&'a D>,
 }
 
 #[derive(Debug, Serialize, Clone, Default)]
@@ -354,12 +138,7 @@ impl Message {
 
 #[cfg(test)]
 mod tests {
-    use crate::SendOptions;
-
-    use super::{
-        FirebaseCloudMessaging, Message, Priority, SendMessageError, SendMessageErrorResponse,
-        SendMessageSuccessResponse,
-    };
+    use super::{FirebaseCloudMessaging, Message};
 
     #[tokio::test]
     #[ignore]
@@ -375,162 +154,13 @@ mod tests {
             book_id: &'static str,
         }
 
-        let a = fcm
-            .send_to_devices(
-                [registration_token],
-                message,
-                SendOptions {
-                    mutable_content: true.into(),
-                    content_available: true.into(),
-                    priority: Priority::High.into(),
-                },
-                Data {
-                    thumbnail: "https://file.madome.app/image/library/2699651/thumbnail",
-                    book_id: "2699651",
-                }
-                .into(),
-            )
-            .await;
+        let data = Some(Data {
+            thumbnail: "https://file.madome.app/image/library/2699651/thumbnail",
+            book_id: "2699651",
+        });
 
-        println!("{a:?}")
-    }
+        let res = fcm.send(registration_token, &message, data.as_ref()).await;
 
-    #[test]
-    fn test_parse_batch_response() {
-        let boundary = "batch_nDhMX4IzFTDLsCJ3kHH7v_44ua-aJT6q";
-
-        let responses = format!(
-            r#"--{boundary}
-Content-Type: application/http
-Content-ID: response-
-
-HTTP/1.1 200 OK
-Content-Type: application/json; charset=UTF-8
-Vary: Origin
-Vary: X-Origin
-Vary: Referer
-
-{{
-    "name": "projects/35006771263/messages/0:1570471792141125%43c11b7043c11b70"
-}}
-
---{boundary}
-Content-Type: application/http
-Content-ID: response-
-
-HTTP/1.1 400 BAD REQUEST
-Content-Type: application/json; charset=UTF-8
-Vary: Origin
-Vary: X-Origin
-Vary: Referer
-
-{{
-    "error": {{
-        "code": 400,
-        "message": "The registration token is not a valid FCM registration token",
-        "status": "INVALID_ARGUMENT"
-  }}
-}}
-
---{boundary}
-Content-Type: application/http
-Content-ID: response-
-
-HTTP/1.1 200 OK
-Content-Type: application/json; charset=UTF-8
-Vary: Origin
-Vary: X-Origin
-Vary: Referer
-
-{{
-    "name": "projects/35006771263/messages/0:1570471792141696%43c11b7043c11b70"
-}}
-
---{boundary}--"#
-        )
-        .replace('\n', "\r\n");
-
-        let actual = FirebaseCloudMessaging::parse_batch_response(&responses, boundary, 3).unwrap();
-
-        let expected = vec![
-            Ok(SendMessageSuccessResponse {
-                name: "projects/35006771263/messages/0:1570471792141125%43c11b7043c11b70"
-                    .to_string(),
-            }),
-            Err(SendMessageErrorResponse {
-                error: SendMessageError {
-                    code: 400,
-                    message: "The registration token is not a valid FCM registration token"
-                        .to_string(),
-                    status: "INVALID_ARGUMENT".to_string(),
-                },
-            }),
-            Ok(SendMessageSuccessResponse {
-                name: "projects/35006771263/messages/0:1570471792141696%43c11b7043c11b70"
-                    .to_string(),
-            }),
-        ];
-
-        assert_eq!(actual, expected);
-    }
-
-    #[test]
-    fn test_parse_response() {
-        let success = r#"Content-Type: application/http
-Content-ID: response-
-
-HTTP/1.1 200 OK
-Content-Type: application/json; charset=UTF-8
-Vary: Origin
-Vary: X-Origin
-Vary: Referer
-
-{
-    "name": "projects/35006771263/messages/0:1570471792141696%43c11b7043c11b70"
-}"#
-        .replace('\n', "\r\n");
-
-        let actual = FirebaseCloudMessaging::parse_response(&success)
-            .unwrap()
-            .unwrap();
-
-        let expected = SendMessageSuccessResponse {
-            name: "projects/35006771263/messages/0:1570471792141696%43c11b7043c11b70".to_string(),
-        };
-
-        assert_eq!(actual, expected);
-
-        let error = r#"{boundary}
-Content-Type: application/http
-Content-ID: response-
-
-HTTP/1.1 400 BAD REQUEST
-Content-Type: application/json; charset=UTF-8
-Vary: Origin
-Vary: X-Origin
-Vary: Referer
-
-{
-    "error": {
-        "code": 400,
-        "message": "The registration token is not a valid FCM registration token",
-        "status": "INVALID_ARGUMENT"
-    }
-}"#
-        .replace('\n', "\r\n");
-
-        let actual = FirebaseCloudMessaging::parse_response(&error)
-            .unwrap()
-            .unwrap_err();
-
-        let expected = SendMessageErrorResponse {
-            error: SendMessageError {
-                code: 400,
-                message: "The registration token is not a valid FCM registration token".to_string(),
-                status: "INVALID_ARGUMENT".to_string(),
-            },
-        };
-
-        assert_eq!(actual, expected);
+        println!("{res:?}")
     }
 }
