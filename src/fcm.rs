@@ -6,6 +6,58 @@ use serde::{Deserialize, Serialize};
 
 use crate::oauth::{Credential, GoogleOAuth2};
 
+mod sealed {
+    use super::*;
+
+    #[derive(Debug, Serialize)]
+    pub struct Body<'a, D>
+    where
+        D: Serialize,
+    {
+        pub message: InnerBody<'a, D>,
+    }
+
+    #[derive(Debug, Serialize)]
+    pub struct InnerBody<'a, D>
+    where
+        D: Serialize,
+    {
+        pub token: &'a str,
+        pub notification: &'a Message,
+
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub data: Option<&'a D>,
+
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub apns: Option<InnerApnsOptions>,
+    }
+
+    #[derive(Debug, Serialize)]
+    pub struct InnerApnsOptions {
+        pub headers: ApnsHeaders,
+        pub payload: ApnsPayload,
+    }
+
+    #[derive(Debug, Serialize)]
+    #[serde(rename_all = "kebab-case")]
+    pub struct ApnsHeaders {
+        /// u8.to_string()
+        pub apns_priority: String,
+    }
+
+    #[derive(Debug, Serialize)]
+    pub struct ApnsPayload {
+        pub aps: Aps,
+    }
+
+    #[derive(Debug, Serialize)]
+    #[serde(rename_all = "kebab-case")]
+    pub struct Aps {
+        pub mutable_content: u8,
+        pub content_available: u8,
+    }
+}
+
 pub struct FirebaseCloudMessaging {
     project_id: String,
     oauth2: GoogleOAuth2,
@@ -36,6 +88,7 @@ impl FirebaseCloudMessaging {
         &self,
         registration_token: &str,
         message: &Message,
+        apns_options: Option<&ApnsOptions>,
         data: Option<&D>,
     ) -> crate::Result<SendMessageSuccessResponse>
     where
@@ -46,10 +99,11 @@ impl FirebaseCloudMessaging {
             self.project_id
         );
         let authorization = format!("Bearer {}", self.oauth2.get_or_update_token());
-        let body = Body {
-            message: InnerBody {
+        let body = sealed::Body {
+            message: sealed::InnerBody {
                 token: registration_token,
                 notification: message,
+                apns: apns_options.map(|x| x.to_inner()),
                 data,
             },
         };
@@ -101,26 +155,6 @@ impl Display for SendMessageErrorResponse {
     }
 }
 
-#[derive(Debug, Serialize)]
-struct Body<'a, D>
-where
-    D: Serialize,
-{
-    message: InnerBody<'a, D>,
-}
-
-#[derive(Debug, Serialize)]
-struct InnerBody<'a, D>
-where
-    D: Serialize,
-{
-    token: &'a str,
-    notification: &'a Message,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    data: Option<&'a D>,
-}
-
 #[derive(Debug, Serialize, Clone, Default)]
 pub struct Message {
     pub title: String,
@@ -136,31 +170,100 @@ impl Message {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct ApnsOptions {
+    pub mutable_content: Option<bool>,
+    pub content_available: Option<bool>,
+    pub priority: Option<ApnsPriority>,
+}
+
+impl ApnsOptions {
+    fn to_inner(&self) -> sealed::InnerApnsOptions {
+        // headers
+
+        let apns_priority = match self.priority.unwrap_or(ApnsPriority::High) {
+            ApnsPriority::High => 10,
+            ApnsPriority::Normal => 5,
+            ApnsPriority::Low => 1,
+        }
+        .to_string();
+
+        // payload
+
+        let mutable_content = if self.mutable_content.unwrap_or(false) {
+            1
+        } else {
+            0
+        };
+        let content_available = if self.content_available.unwrap_or(false) {
+            1
+        } else {
+            0
+        };
+
+        sealed::InnerApnsOptions {
+            headers: sealed::ApnsHeaders { apns_priority },
+            payload: sealed::ApnsPayload {
+                aps: sealed::Aps {
+                    mutable_content,
+                    content_available,
+                },
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ApnsPriority {
+    High,
+    Normal,
+    Low,
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{FirebaseCloudMessaging, Message};
+    use super::{ApnsOptions, ApnsPriority, FirebaseCloudMessaging, Message};
 
     #[tokio::test]
     #[ignore]
-    async fn test_send_to_devices() {
+    async fn test_send() {
         let fcm = FirebaseCloudMessaging::from_credential_path("./firebase.credential.json");
 
-        let registration_token = "";
-        let message = Message::new("title", "body");
+        let registration_tokens = [];
 
-        #[derive(Debug, serde::Serialize)]
-        struct Data {
-            thumbnail: &'static str,
-            book_id: &'static str,
+        for registration_token in registration_tokens {
+            let message = Message::new(
+                "좋아하실만한 작품이 올라왔어요 (테스트)",
+                "저주 때문에 MP가 부족해요!!",
+            );
+
+            #[derive(Debug, serde::Serialize)]
+            struct Data {
+                thumbnail: &'static str,
+                book_id: &'static str,
+            }
+
+            let data = Some(Data {
+                thumbnail: "https://file.madome.app/image/library/3277177/thumbnail",
+                book_id: "3277177",
+            });
+
+            let res = fcm
+                .send(
+                    registration_token,
+                    &message,
+                    Some(&ApnsOptions {
+                        mutable_content: Some(true),
+                        content_available: Some(true),
+                        priority: Some(ApnsPriority::High),
+                    }),
+                    data.as_ref(),
+                )
+                .await;
+
+            println!("{res:?}");
+
+            res.unwrap();
         }
-
-        let data = Some(Data {
-            thumbnail: "https://file.madome.app/image/library/2699651/thumbnail",
-            book_id: "2699651",
-        });
-
-        let res = fcm.send(registration_token, &message, data.as_ref()).await;
-
-        println!("{res:?}")
     }
 }
